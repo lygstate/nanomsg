@@ -25,6 +25,8 @@
 
 #include "../utils/win.h"
 
+static const int AF_NN_NAMEDPIPE = 256; /* Making one up with a value that doesn't collide with AF_* constants defined by Windows */
+
 struct nn_usock {
 
     /*  The state machine. */

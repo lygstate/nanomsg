@@ -106,6 +106,37 @@ int nn_usock_isidle (struct nn_usock *self)
     return nn_fsm_isidle (&self->fsm);
 }
 
+int nn_pipe_start (struct nn_usock *self, struct nn_usock *listener)
+{
+    HANDLE instance;
+    HANDLE cp;
+    struct nn_worker *worker;
+
+    /* TODO: pipe name dance */
+    const char *win_name = "\\\\.\\pipe\\test.ipc";
+
+    /* TODO: expose custom nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes */
+    /* NOTE: FILE_FLAG_OVERLAPPED + PIPE_WAIT: http://blogs.msdn.com/b/oldnewthing/archive/2011/01/14/10115610.aspx?Redirected=true */
+    instance = CreateNamedPipeA ( win_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, NULL );
+    nn_assert (instance != INVALID_HANDLE_VALUE);
+    self->p = instance;
+
+    /*  Associate the socket with a worker thread/completion port. */
+    worker = nn_fsm_choose_worker (&self->fsm);
+    cp = CreateIoCompletionPort (self->p, nn_worker_getcp (worker), (ULONG_PTR) NULL, 0);
+    nn_assert (cp != NULL);
+
+    /*  Remember the type of the socket. */
+    self->domain = listener->domain;
+    self->type = listener->type;
+    self->protocol = listener->protocol;
+
+    /*  Start the state machine. */
+    nn_fsm_start (&self->fsm);
+
+    return 0;
+}
+
 int nn_usock_start (struct nn_usock *self, int domain, int type, int protocol)
 {
     int rc;
@@ -223,14 +254,23 @@ int nn_usock_listen (struct nn_usock *self, int backlog)
     return 0;
 }
 
+BOOL nn_pipe_accept (struct nn_usock *self)
+{
+    return TRUE;
+}
+
 void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
 {
     int rc;
     BOOL brc;
     DWORD nbytes;
 
-    rc = nn_usock_start (self, listener->domain, listener->type,
-        listener->protocol);
+    if ( listener->domain == AF_NN_NAMEDPIPE ) {
+        rc = nn_pipe_start (self, listener);
+    } else {
+        rc = nn_usock_start (self, listener->domain, listener->type,
+            listener->protocol);
+    }
     /*  TODO: EMFILE can be returned here. */
     errnum_assert (rc == 0, -rc);
     nn_fsm_action (&listener->fsm, NN_USOCK_ACTION_ACCEPT);
@@ -244,8 +284,14 @@ void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
 
     /*  Wait for the incoming connection. */
     memset (&listener->in.olpd, 0, sizeof (listener->in.olpd));
-    brc = AcceptEx (listener->s, self->s, listener->ainfo, 0, 256, 256, &nbytes,
-        &listener->in.olpd);
+
+    if ( listener->domain == AF_NN_NAMEDPIPE ) {
+        // FIXME: on self, or on listener? with which OVERLAPPED?
+        brc = nn_pipe_accept (self);
+    } else {
+        brc = AcceptEx (listener->s, self->s, listener->ainfo, 0, 256, 256, &nbytes,
+            &listener->in.olpd);
+    }
 
     /*  Immediate success. */
     if (nn_fast (brc == TRUE)) {
@@ -395,6 +441,7 @@ static void nn_usock_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
     int rc;
+    BOOL brc;
     struct nn_usock *usock;
 
     usock = nn_cont (self, struct nn_usock, fsm);
@@ -450,8 +497,13 @@ static void nn_usock_shutdown (struct nn_fsm *self, int src, int type,
               !nn_worker_op_isidle (&usock->out))
             return;
 finish1:
-        rc = closesocket (usock->s);
-        wsa_assert (rc == 0);
+        if ( usock->domain == AF_NN_NAMEDPIPE ) {
+            brc = CloseHandle (usock->p);
+            win_assert (brc);
+        } else {
+            rc = closesocket (usock->s);
+            wsa_assert (rc == 0);
+        }
 finish2:
         usock->state = NN_USOCK_STATE_IDLE;
         nn_fsm_stopped (&usock->fsm, NN_USOCK_STOPPED);

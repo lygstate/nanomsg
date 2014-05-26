@@ -381,6 +381,87 @@ static void nn_cipc_handler (struct nn_fsm *self, int src, int type,
 
 static void nn_cipc_start_connecting (struct nn_cipc *self)
 {
+#if defined NN_HAVE_WINDOWS
+    const char *addr;
+    const char *win_name;
+
+    // TODO: transform the name
+    // http://msdn.microsoft.com/en-us/library/windows/desktop/aa365783(v=vs.85).aspx
+    addr = nn_epbase_getaddr (&self->epbase);
+    win_name = "\\\\.\\pipe\\test.ipc";
+
+    // nn_usock_start replacement:
+    // same as nn_bipc_start_listening - should probably become a nn_pipe_start
+    {
+        HANDLE instance;
+        HANDLE cp;
+        struct nn_worker *worker;
+
+        // TODO: expose a way to pass lpSecurityAttributes
+        instance = CreateFile ( win_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_FLAG_OVERLAPPED, NULL );
+        win_assert (instance != INVALID_HANDLE_VALUE);
+
+        self->usock.p = instance;
+
+#if 0
+        // TODO: expose custom nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes
+        // NOTE: FILE_FLAG_OVERLAPPED + PIPE_WAIT: http://blogs.msdn.com/b/oldnewthing/archive/2011/01/14/10115610.aspx?Redirected=true
+        instance = CreateNamedPipeA ( win_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, NULL );
+        nn_assert (instance != INVALID_HANDLE_VALUE);
+        self->p = instance;
+#endif
+
+        /*  Associate the socket with a worker thread/completion port. */
+        worker = nn_fsm_choose_worker (&self->fsm);
+        cp = CreateIoCompletionPort(self->usock.p,
+            nn_worker_getcp (worker), (ULONG_PTR) NULL, 0);
+        nn_assert (cp != NULL);
+
+        self->usock.domain = AF_NN_NAMEDPIPE;
+        self->usock.type = -1;
+        self->usock.protocol = -1;
+
+        /*  Start the state machine. */
+        nn_fsm_start (&self->fsm);
+    }
+
+    // nn_usock_connect replacement:
+    //nn_usock_connect (&self->usock, (struct sockaddr*) &ss, sizeof (struct sockaddr_un));
+    {
+#define NN_USOCK_STATE_STARTING 2
+#define NN_USOCK_ACTION_CONNECT 5
+        nn_assert_state (&self->usock, NN_USOCK_STATE_STARTING);
+        nn_fsm_action (&self->fsm, NN_USOCK_ACTION_CONNECT);
+
+        // FIXME
+        // Doing CreateFile to connect above .. but there is no OVERLAPPED .. it's in ReadFile/WriteFile calls ..
+        // So how do we start some kind of overlapped operation waiting for the connection to establish?
+
+#if 0
+        // http://msdn.microsoft.com/en-us/library/windows/desktop/aa365146(v=vs.85).aspx
+        // NOTE: not setting up a 'manual reset' event
+
+        // NOTE: usock_win.inc does a memset before first use for the SOCKET cases,
+        // maybe it would be better to move those memsets to nn_worker_op_init?
+        memset (&self->out.olpd, 0, sizeof(OVERLAPPED));
+
+        connect_ret = ConnectNamedPipe (self->p, &self->out.olpd);
+        nn_assert (connect_ret == FALSE); // Asynchronous: always returns 0
+        err = GetLastError();
+        // NOTE: ERROR_PIPE_CONNECTED is a rare edge case situation
+        nn_assert (err == ERROR_IO_PENDING || err == ERROR_PIPE_CONNECTED); // Success
+
+        nn_worker_op_start (&self->out, 0);
+#endif
+
+    }
+
+    self->state  = NN_CIPC_STATE_CONNECTING;
+
+    nn_epbase_stat_increment (&self->epbase,
+        NN_STAT_INPROGRESS_CONNECTIONS, 1);
+
+#else
     int rc;
     struct sockaddr_storage ss;
     struct sockaddr_un *un;
@@ -423,4 +504,5 @@ static void nn_cipc_start_connecting (struct nn_cipc *self)
 
     nn_epbase_stat_increment (&self->epbase,
         NN_STAT_INPROGRESS_CONNECTIONS, 1);
+#endif
 }
