@@ -35,7 +35,7 @@
 
 struct sockaddr_un {
     ADDRESS_FAMILY   sun_family;              /* address family AF_LOCAL/AF_UNIX */
-    char             sun_path[256];           /* 256 bytes of socket address according to:
+    char             sun_path[sizeof(struct sockaddr_storage) - sizeof(ADDRESS_FAMILY)];           /* 256 bytes of socket address according to:
                                                 http://msdn.microsoft.com/en-us/library/windows/desktop/aa365150.aspx */
 };
 #define ssize_t int
