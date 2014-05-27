@@ -44,14 +44,23 @@ int main ()
     /*  Try closing bound but unconnected socket. */
     sb = test_socket (AF_SP, NN_PAIR);
     test_bind (sb, SOCKET_ADDRESS);
-    test_close (sb);
 
     /*  Try closing a TCP socket while it not connected. At the same time
         test specifying the local address for the connection. */
     sc = test_socket (AF_SP, NN_PAIR);
     test_connect (sc, "tcp://127.0.0.1;127.0.0.1:5555");
-    test_close (sc);
 
+    /*  Ping-pong test. */
+    for (i = 0; i != 100; ++i) {
+
+        test_send(sc, "ABC");
+        test_recv(sb, "ABC");
+
+        test_send(sb, "DEF");
+        test_recv(sc, "DEF");
+    }
+    test_close(sb);
+    test_close(sc);
     /*  Open the socket anew. */
     sc = test_socket (AF_SP, NN_PAIR);
 
