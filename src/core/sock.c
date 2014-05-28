@@ -160,6 +160,10 @@ int nn_sock_init (struct nn_sock *self, struct nn_socktype *socktype, int fd)
     errnum_assert (rc == 0, -rc);
     self->socktype = socktype;
 
+#if defined NN_HAVE_WINDOWS
+    self->rcvfd.domain = self->socktype->domain;
+    self->sndfd.domain = self->socktype->domain;
+#endif
     /*  Launch the state machine. */
     nn_ctx_enter (&self->ctx);
     nn_fsm_start (&self->fsm);

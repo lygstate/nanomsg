@@ -25,6 +25,7 @@
 struct nn_efd {
     SOCKET r;
     SOCKET w;
+    int domain;
     fd_set fds;
 };
 

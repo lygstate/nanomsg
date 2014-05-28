@@ -58,30 +58,32 @@ int nn_efd_wait (struct nn_efd *self, int timeout)
 
 int nn_efd_wait (struct nn_efd *self, int timeout)
 {
-#if 0
-    int rc;
-    struct timeval tv;
+    if (1) {
+        int rc;
+        struct timeval tv;
 
-    FD_SET (self->r, &self->fds);
-    if (timeout >= 0) {
-        tv.tv_sec = timeout / 1000;
-        tv.tv_usec = timeout % 1000 * 1000;
+        FD_SET (self->r, &self->fds);
+        if (timeout >= 0) {
+            tv.tv_sec = timeout / 1000;
+            tv.tv_usec = timeout % 1000 * 1000;
+        }
+        rc = select (0, &self->fds, NULL, NULL, timeout >= 0 ? &tv : NULL);
+        wsa_assert (rc != SOCKET_ERROR);
+        if (nn_slow (rc == 0))
+            return -ETIMEDOUT;
     }
-    rc = select (0, &self->fds, NULL, NULL, timeout >= 0 ? &tv : NULL);
-    wsa_assert (rc != SOCKET_ERROR);
-    if (nn_slow (rc == 0))
-        return -ETIMEDOUT;
-#else
-    DWORD rc;
-    rc = WaitForMultipleObjects(
-        self->fds.fd_count,    // number of event objects 
-        (const HANDLE*)self->fds.fd_array,      // array of event objects 
-        FALSE,        // does not wait for all 
-        timeout >= 0 ? timeout : INFINITE);    // waits indefinitely 
-    wsa_assert(rc != WAIT_FAILED);
-    if (nn_slow(rc == WAIT_TIMEOUT))
-        return -ETIMEDOUT;
-#endif
+    else
+    {
+        DWORD rc;
+        rc = WaitForMultipleObjects(
+            self->fds.fd_count,    // number of event objects 
+            (const HANDLE*)self->fds.fd_array,      // array of event objects 
+            FALSE,        // does not wait for all 
+            timeout >= 0 ? timeout : INFINITE);    // waits indefinitely 
+        win_assert(rc != WAIT_FAILED);
+        if (nn_slow(rc == WAIT_TIMEOUT))
+            return -ETIMEDOUT;
+    }
     return 0;
 }
 
