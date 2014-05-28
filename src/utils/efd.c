@@ -58,6 +58,7 @@ int nn_efd_wait (struct nn_efd *self, int timeout)
 
 int nn_efd_wait (struct nn_efd *self, int timeout)
 {
+#if 0
     int rc;
     struct timeval tv;
 
@@ -70,6 +71,17 @@ int nn_efd_wait (struct nn_efd *self, int timeout)
     wsa_assert (rc != SOCKET_ERROR);
     if (nn_slow (rc == 0))
         return -ETIMEDOUT;
+#else
+    DWORD rc;
+    rc = WaitForMultipleObjects(
+        self->fds.fd_count,    // number of event objects 
+        (const HANDLE*)self->fds.fd_array,      // array of event objects 
+        FALSE,        // does not wait for all 
+        timeout >= 0 ? timeout : INFINITE);    // waits indefinitely 
+    wsa_assert(rc != WAIT_FAILED);
+    if (nn_slow(rc == WAIT_TIMEOUT))
+        return -ETIMEDOUT;
+#endif
     return 0;
 }
 
