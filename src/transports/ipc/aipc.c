@@ -178,6 +178,9 @@ static void nn_aipc_handler (struct nn_fsm *self, int src, int type,
 
         case NN_AIPC_SRC_USOCK:
             switch (type) {
+            case NN_USOCK_ACCEPT_ERROR:
+                nn_usock_accept(&aipc->usock, aipc->listener);
+                return;
             case NN_USOCK_ACCEPTED:
                 nn_epbase_clear_error (aipc->epbase);
 
