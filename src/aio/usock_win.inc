@@ -70,6 +70,8 @@ void nn_usock_init (struct nn_usock *self, int src, struct nn_fsm *owner, struct
     self->state = NN_USOCK_STATE_IDLE;
     self->ep = ep;
     self->s = INVALID_SOCKET;
+    self->buf = NULL;
+    self->isaccepted = FALSE;
     nn_worker_op_init (&self->in, NN_USOCK_SRC_IN, &self->fsm);
     nn_worker_op_init (&self->out, NN_USOCK_SRC_OUT, &self->fsm);
     self->domain = -1;
@@ -502,7 +504,8 @@ void nn_usock_send (struct nn_usock *self, const struct nn_iovec *iov,
     memset (&self->out.olpd, 0, sizeof (self->out.olpd));
     if (self->domain == AF_UNIX)
     {
-        /* TODO: fixme do not copy the buffer */
+        /* TODO: fixme do not copy the buffer, using a efficent way to Write 
+           multiple buffer and doesn't affect the state machine */
         size_t idx = 0;
         self->buf = nn_alloc(totLen, "SendBuf NamedPipe");
         for (i = 0; i != iovcnt; ++i) {
@@ -587,6 +590,10 @@ void nn_usock_recv (struct nn_usock *self, void *buf, size_t len)
 }
 
 static void nn_usock_close(struct nn_usock *self) {
+    if (self->buf != NULL)
+    {
+        nn_free(self->buf);
+    }
     if (self->domain == AF_UNIX) {
         if (self->p == INVALID_HANDLE_VALUE)
         {
@@ -826,7 +833,7 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_WORKER_OP_DONE:
                 if (usock->buf) {
-                    free(usock->buf);
+                    nn_free(usock->buf);
                     usock->buf = NULL;
                 }
                 nn_fsm_raise (&usock->fsm, &usock->event_sent, NN_USOCK_SENT);
@@ -909,7 +916,15 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
                 usock->state = NN_USOCK_STATE_LISTENING;
                 return;
             case NN_USOCK_ACTION_CANCEL:
-                nn_usock_cancel_io (usock);
+                if (usock->p == INVALID_HANDLE_VALUE && usock->asock != NULL && usock->domain == AF_UNIX) {
+                    usock->p = usock->asock->p;
+                    nn_usock_cancel_io(usock);
+                    usock->p = INVALID_HANDLE_VALUE;
+                }
+                else
+                {
+                    nn_usock_cancel_io(usock);
+                }
                 usock->state = NN_USOCK_STATE_CANCELLING;
                 return;
             default:
