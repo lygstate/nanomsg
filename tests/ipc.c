@@ -44,11 +44,11 @@ int main ()
     sc = test_socket (AF_SP, NN_PAIR);
     test_connect (sc, SOCKET_ADDRESS);
 
+    test_send(sb, "pong");
+    test_recv(sc, "pong");
+
     test_send (sc, "ping");
     test_recv (sb, "ping");
-
-    test_send (sb, "pong");
-    test_recv (sc, "pong");
 
     /*  Try closing a IPC socket while it is not connected. */
     sc = test_socket (AF_SP, NN_PAIR);

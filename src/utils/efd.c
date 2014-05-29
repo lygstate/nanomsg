@@ -58,11 +58,11 @@ int nn_efd_wait (struct nn_efd *self, int timeout)
 
 int nn_efd_wait (struct nn_efd *self, int timeout)
 {
+    FD_SET(self->r, &self->fds);
     if (1) {
         int rc;
         struct timeval tv;
 
-        FD_SET (self->r, &self->fds);
         if (timeout >= 0) {
             tv.tv_sec = timeout / 1000;
             tv.tv_usec = timeout % 1000 * 1000;
@@ -79,7 +79,7 @@ int nn_efd_wait (struct nn_efd *self, int timeout)
             self->fds.fd_count,    // number of event objects 
             (const HANDLE*)self->fds.fd_array,      // array of event objects 
             FALSE,        // does not wait for all 
-            timeout >= 0 ? timeout : INFINITE);    // waits indefinitely 
+            timeout >= 0 ? timeout : 1000);    // waits indefinitely 
         win_assert(rc != WAIT_FAILED);
         if (nn_slow(rc == WAIT_TIMEOUT))
             return -ETIMEDOUT;

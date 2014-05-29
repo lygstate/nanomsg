@@ -43,8 +43,6 @@
 #define NN_USOCK_STATE_CANCELLING 11
 #define NN_USOCK_STATE_STOPPING 12
 #define NN_USOCK_STATE_STOPPING_ACCEPT 13
-#define NN_USOCK_STATE_PIPE_BEING_ACCEPTED 14
-#define NN_USOCK_STATE_PIPE_ACCEPTED 15
 
 #define NN_USOCK_ACTION_ACCEPT 1
 #define NN_USOCK_ACTION_BEING_ACCEPTED 2
@@ -54,7 +52,6 @@
 #define NN_USOCK_ACTION_ACTIVATE 6
 #define NN_USOCK_ACTION_DONE 7
 #define NN_USOCK_ACTION_ERROR 8
-#define NN_USOCK_ACTION_PIPE_BEING_ACCEPTED 9
 
 #define NN_USOCK_SRC_IN 1
 #define NN_USOCK_SRC_OUT 2
@@ -237,7 +234,7 @@ static void nn_pipe_create(struct nn_usock *self)
         0,
         NULL);
     /* TODO: do error convert self->p check*/
-
+    self->isaccepted = TRUE;
     nn_uscok_create_io_completeion(self);
 }
 
@@ -272,7 +269,7 @@ DWORD nn_pipe_open(struct nn_usock *self)
     {
         return winerror;
     }
-
+    self->isaccepted = FALSE;
     nn_uscok_create_io_completeion(self);
 
     return ERROR_SUCCESS;
@@ -502,9 +499,8 @@ void nn_usock_send (struct nn_usock *self, const struct nn_iovec *iov,
     memset (&self->out.olpd, 0, sizeof (self->out.olpd));
     if (self->domain == AF_UNIX)
     {
-        DWORD cnt;
         for (i = 0; brc && i != iovcnt; ++i) {
-            brc = WriteFile(self->p, iov[i].iov_base, iov[i].iov_len, &cnt, &self->out.olpd);
+            brc = WriteFile(self->p, iov[i].iov_base, iov[i].iov_len, NULL, &self->out.olpd);
         }
         winerror = GetLastError();
     }
@@ -551,8 +547,7 @@ void nn_usock_recv (struct nn_usock *self, void *buf, size_t len)
     memset (&self->in.olpd, 0, sizeof (self->in.olpd));
     if (self->domain == AF_UNIX)
     {
-        DWORD cnt;
-        brc = ReadFile(self->p, buf, len, &cnt, &self->in.olpd);
+        brc = ReadFile(self->p, buf, len, NULL, &self->in.olpd);
         winerror = GetLastError();
     }
     else
@@ -584,7 +579,9 @@ void nn_usock_recv (struct nn_usock *self, void *buf, size_t len)
 
 static void nn_usock_close(struct nn_usock *self) {
     if (self->domain == AF_UNIX) {
-        DisconnectNamedPipe(self->p);
+        if (self->isaccepted) {
+            DisconnectNamedPipe(self->p);
+        }
         BOOL brc = CloseHandle(self->p);
         win_assert(brc);
     }
@@ -706,9 +703,6 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
             case NN_USOCK_ACTION_BEING_ACCEPTED:
                 usock->state = NN_USOCK_STATE_BEING_ACCEPTED;
                 return;
-            case NN_USOCK_ACTION_PIPE_BEING_ACCEPTED:
-                usock->state = NN_USOCK_STATE_PIPE_BEING_ACCEPTED;
-                return;
             default:
                 nn_fsm_bad_action (usock->state, src, type);
             }
@@ -734,39 +728,7 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         default:
             nn_fsm_bad_source (usock->state, src, type);
         }
-    case NN_USOCK_STATE_PIPE_BEING_ACCEPTED:
-        switch (src) {
-        case NN_FSM_ACTION:
-            switch (type) {
-            case NN_USOCK_ACTION_DONE:
-                /*  Adjust the new usock object. */
-                usock->asock->state = NN_USOCK_STATE_ACCEPTED;
 
-                /*  Notify the user that connection was accepted. */
-                nn_fsm_raise(&usock->asock->fsm,
-                    &usock->asock->event_established, NN_USOCK_ACCEPTED);
-
-                /*  Disassociate the listener socket from the accepted
-                socket. */
-                usock->asock->asock = NULL;
-                usock->asock = NULL;
-                return;
-            default:
-                nn_fsm_bad_action(usock->state, src, type);
-            }
-        case NN_USOCK_SRC_IN:
-            switch (type) {
-            case NN_WORKER_OP_DONE:
-                /*  Notify the user that we need to re-accpet by generating NN_USOCK_ACCEPT_ERROR. */
-                nn_fsm_raise(&usock->asock->fsm,
-                    &usock->asock->event_established, NN_USOCK_ACCEPT_ERROR);
-                return;
-            default:
-                nn_fsm_bad_action(usock->state, src, type);
-            }
-        default:
-            nn_fsm_bad_source(usock->state, src, type);
-        }
 /*****************************************************************************/
 /*  ACCEPTED state.                                                          */
 /*****************************************************************************/

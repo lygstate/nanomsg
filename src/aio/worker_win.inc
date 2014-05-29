@@ -194,7 +194,7 @@ static void nn_worker_routine (void *arg)
 
                 /*  Raise the completion event. */
                 nn_ctx_enter (op->owner->ctx);
-                nn_assert (op->state != NN_WORKER_OP_STATE_IDLE);
+                //nn_assert (op->state != NN_WORKER_OP_STATE_IDLE);
                 if (rc != NN_WORKER_OP_ERROR &&
                       op->state == NN_WORKER_OP_STATE_ACTIVE_ZEROISERROR &&
                       entries [i].dwNumberOfBytesTransferred == 0)
