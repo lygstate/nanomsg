@@ -214,7 +214,7 @@ int nn_usock_setsockopt (struct nn_usock *self, int level, int optname,
  http://wiki.linpert.de/index.php?title=Windows_f%C3%BCr_Softwareentwickler_Praktikum_5_(Prof._Dr._Dankwart_Zimmerling)
  http://vcrefer.googlecode.com/svn/Beanstalkapp/VS2005/IPC/PipeServer/PipeServer.cpp
  */
-static int nn_pipe_create(struct nn_usock *self)
+static void nn_pipe_create(struct nn_usock *self)
 {
     struct sockaddr_storage ss;
     const struct sockaddr_un *addr = (struct sockaddr_un *)&ss;
@@ -239,9 +239,6 @@ static int nn_pipe_create(struct nn_usock *self)
     /* TODO: do error convert self->p check*/
 
     nn_uscok_create_io_completeion(self);
-
-    memset(&self->in.olpd, 0, sizeof(self->in.olpd));
-    return ConnectNamedPipe(self->p, (LPOVERLAPPED)&self->in.olpd);
 }
 
 DWORD nn_pipe_open(struct nn_usock *self)
@@ -331,40 +328,48 @@ listen_done:
 }
 
 void nn_pipe_accept(struct nn_usock *self, struct nn_usock *listener) {
+    int rc;
     BOOL brc;
     DWORD winerror;
-    if (self->domain == -1) {
-        int rc = nn_usock_start(self, listener->domain, listener->type,
-            listener->protocol);
-        errnum_assert(rc == 0, -rc);
-        nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_ACCEPT);
-        nn_fsm_action(&self->fsm, NN_USOCK_ACTION_PIPE_BEING_ACCEPTED);
-        nn_pipe_create(self);
+
+    rc = nn_usock_start(self, listener->domain, listener->type,
+        listener->protocol);
+    /*  TODO: EMFILE can be returned here. */
+    errnum_assert(rc == 0, -rc);
+    nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_ACCEPT);
+    nn_fsm_action(&self->fsm, NN_USOCK_ACTION_BEING_ACCEPTED);
+
+    /*  If the memory for accept information is not yet allocated, do so.  */
+    if (!listener->ainfo) {
+        listener->ainfo = nn_alloc(512, "accept info");
+        alloc_assert(listener->ainfo);
     }
 
-    memset(&self->in.olpd, 0, sizeof(self->in.olpd));
-    brc = ConnectNamedPipe(self->p, (LPOVERLAPPED)&self->in.olpd);
-    nn_assert(brc == FALSE); // Asynchronous: always returns 0
+    /*  Wait for the incoming connection. */
+    memset(&listener->in.olpd, 0, sizeof(listener->in.olpd));
+    nn_pipe_create(self);
+    brc = ConnectNamedPipe(self->p, (LPOVERLAPPED)&listener->in.olpd);
     winerror = GetLastError();
-    switch (winerror) {
-    case ERROR_IO_PENDING: {
-        /*  Pair the two sockets. */
-        nn_assert(!self->asock);
-        self->asock = listener;
-        nn_assert(!listener->asock);
-        listener->asock = self;
 
-        /*  Asynchronous accept. */
-        nn_worker_op_start(&self->in, 0);
-        return;
-    }
-    case ERROR_PIPE_CONNECTED: {
+    nn_assert(brc == FALSE);
+    /*  Immediate success. */
+    if (nn_fast(winerror == ERROR_PIPE_CONNECTED)) {
         nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_DONE);
         nn_fsm_action(&self->fsm, NN_USOCK_ACTION_DONE);
         return;
     }
-    default: nn_assert(0);
-    }
+
+    /*  We don't expect a synchronous failure at this point. */
+    wsa_assert(nn_slow(winerror == WSA_IO_PENDING));
+
+    /*  Pair the two sockets. */
+    nn_assert(!self->asock);
+    self->asock = listener;
+    nn_assert(!listener->asock);
+    listener->asock = self;
+
+    /*  Asynchronous accept. */
+    nn_worker_op_start(&listener->in, 0);
 }
 
 void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
