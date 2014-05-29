@@ -43,7 +43,8 @@
 #define NN_USOCK_STATE_CANCELLING 11
 #define NN_USOCK_STATE_STOPPING 12
 #define NN_USOCK_STATE_STOPPING_ACCEPT 13
-#define NN_USOCK_STATE_PIPE_ACCEPTING 14
+#define NN_USOCK_STATE_PIPE_BEING_ACCEPTED 14
+#define NN_USOCK_STATE_PIPE_ACCEPTED 15
 
 #define NN_USOCK_ACTION_ACCEPT 1
 #define NN_USOCK_ACTION_BEING_ACCEPTED 2
@@ -53,7 +54,7 @@
 #define NN_USOCK_ACTION_ACTIVATE 6
 #define NN_USOCK_ACTION_DONE 7
 #define NN_USOCK_ACTION_ERROR 8
-#define NN_USOCK_ACTION_PIPE_LISTEN 9
+#define NN_USOCK_ACTION_PIPE_BEING_ACCEPTED 9
 
 #define NN_USOCK_SRC_IN 1
 #define NN_USOCK_SRC_OUT 2
@@ -109,7 +110,6 @@ int nn_usock_isidle (struct nn_usock *self)
     return nn_fsm_isidle (&self->fsm);
 }
 
-//http://www.winsocketdotnetworkprogramming.com/winsock2programming/winsock2advancediomethod5h.html
 void nn_uscok_create_io_completeion(struct nn_usock *self) {
     struct nn_worker *worker;
     HANDLE cp;
@@ -208,6 +208,11 @@ int nn_usock_setsockopt (struct nn_usock *self, int level, int optname,
 /*
  Named Pipe Server Using Completion Routines
  http://msdn.microsoft.com/en-us/library/windows/desktop/aa365601(v=vs.85).aspx
+ Another Named Pipe Server Using Overlapped I/O
+ http://www.winsocketdotnetworkprogramming.com/winsock2programming/winsock2advancednamedpipe15d.html
+ http://www.winsocketdotnetworkprogramming.com/winsock2programming/winsock2advancediomethod5h.html
+ http://wiki.linpert.de/index.php?title=Windows_f%C3%BCr_Softwareentwickler_Praktikum_5_(Prof._Dr._Dankwart_Zimmerling)
+ http://vcrefer.googlecode.com/svn/Beanstalkapp/VS2005/IPC/PipeServer/PipeServer.cpp
  */
 static int nn_pipe_create(struct nn_usock *self)
 {
@@ -285,7 +290,6 @@ int nn_usock_bind (struct nn_usock *self, const struct sockaddr *addr,
     /*  You can set socket options only before the socket is connected. */
     nn_assert_state (self, NN_USOCK_STATE_STARTING);
     if (addr->sa_family == AF_UNIX) {
-        nn_pipe_create(self);
         return 0;
     }
     /*  On Windows, the bound port can be hijacked
@@ -333,15 +337,17 @@ void nn_pipe_accept(struct nn_usock *self, struct nn_usock *listener) {
         int rc = nn_usock_start(self, listener->domain, listener->type,
             listener->protocol);
         errnum_assert(rc == 0, -rc);
-        nn_fsm_action(&self->fsm, NN_USOCK_ACTION_BEING_ACCEPTED);
+        nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_ACCEPT);
+        nn_fsm_action(&self->fsm, NN_USOCK_ACTION_PIPE_BEING_ACCEPTED);
+        nn_pipe_create(self);
     }
 
-    memset(&listener->in.olpd, 0, sizeof(listener->in.olpd));
-    brc = ConnectNamedPipe(listener->p, (LPOVERLAPPED)&listener->in.olpd);
+    memset(&self->in.olpd, 0, sizeof(self->in.olpd));
+    brc = ConnectNamedPipe(self->p, (LPOVERLAPPED)&self->in.olpd);
     nn_assert(brc == FALSE); // Asynchronous: always returns 0
     winerror = GetLastError();
     switch (winerror) {
-    case ERROR_IO_PENDING:
+    case ERROR_IO_PENDING: {
         /*  Pair the two sockets. */
         nn_assert(!self->asock);
         self->asock = listener;
@@ -349,22 +355,16 @@ void nn_pipe_accept(struct nn_usock *self, struct nn_usock *listener) {
         listener->asock = self;
 
         /*  Asynchronous accept. */
-        nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_PIPE_LISTEN);
-        nn_worker_op_start(&listener->in, 0);
+        nn_worker_op_start(&self->in, 0);
         return;
+    }
     case ERROR_PIPE_CONNECTED: {
-        self->p = listener->p;
-        nn_pipe_create(listener);
-        nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_ACCEPT);
         nn_fsm_action(&listener->fsm, NN_USOCK_ACTION_DONE);
         nn_fsm_action(&self->fsm, NN_USOCK_ACTION_DONE);
-        break;
+        return;
     }
-    default:
-        nn_assert(0);
-        break;
+    default: nn_assert(0);
     }
-
 }
 
 void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
@@ -701,6 +701,9 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
             case NN_USOCK_ACTION_BEING_ACCEPTED:
                 usock->state = NN_USOCK_STATE_BEING_ACCEPTED;
                 return;
+            case NN_USOCK_ACTION_PIPE_BEING_ACCEPTED:
+                usock->state = NN_USOCK_STATE_PIPE_BEING_ACCEPTED;
+                return;
             default:
                 nn_fsm_bad_action (usock->state, src, type);
             }
@@ -726,7 +729,39 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         default:
             nn_fsm_bad_source (usock->state, src, type);
         }
+    case NN_USOCK_STATE_PIPE_BEING_ACCEPTED:
+        switch (src) {
+        case NN_FSM_ACTION:
+            switch (type) {
+            case NN_USOCK_ACTION_DONE:
+                /*  Adjust the new usock object. */
+                usock->asock->state = NN_USOCK_STATE_ACCEPTED;
 
+                /*  Notify the user that connection was accepted. */
+                nn_fsm_raise(&usock->asock->fsm,
+                    &usock->asock->event_established, NN_USOCK_ACCEPTED);
+
+                /*  Disassociate the listener socket from the accepted
+                socket. */
+                usock->asock->asock = NULL;
+                usock->asock = NULL;
+                return;
+            default:
+                nn_fsm_bad_action(usock->state, src, type);
+            }
+        case NN_USOCK_SRC_IN:
+            switch (type) {
+            case NN_WORKER_OP_DONE:
+                /*  Notify the user that we need to re-accpet by generating NN_USOCK_ACCEPT_ERROR. */
+                nn_fsm_raise(&usock->asock->fsm,
+                    &usock->asock->event_established, NN_USOCK_ACCEPT_ERROR);
+                return;
+            default:
+                nn_fsm_bad_action(usock->state, src, type);
+            }
+        default:
+            nn_fsm_bad_source(usock->state, src, type);
+        }
 /*****************************************************************************/
 /*  ACCEPTED state.                                                          */
 /*****************************************************************************/
@@ -869,9 +904,6 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         switch (src) {
         case NN_FSM_ACTION:
             switch (type) {
-            case NN_USOCK_ACTION_PIPE_LISTEN:
-                usock->state = NN_USOCK_STATE_PIPE_ACCEPTING;
-                return;
             case NN_USOCK_ACTION_ACCEPT:
                 usock->state = NN_USOCK_STATE_ACCEPTING;
                 return;
@@ -885,35 +917,6 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
 /*****************************************************************************/
 /*  ACCEPTING state.                                                         */
 /*****************************************************************************/
-    case NN_USOCK_STATE_PIPE_ACCEPTING:
-        switch (src) {
-        case NN_USOCK_SRC_IN:
-            switch (type) {
-            case NN_WORKER_OP_DONE:
-
-                /*  Adjust the new usock object. */
-                usock->asock->state = NN_USOCK_STATE_BEING_ACCEPTED;
-
-                /*  Notify the user that connection there are accepted error. */
-                nn_fsm_raise(&usock->asock->fsm,
-                    &usock->asock->event_established, NN_USOCK_ACCEPT_ERROR);
-
-                /*  Disassociate the listener socket from the accepted
-                socket. */
-                usock->asock->asock = NULL;
-                usock->asock = NULL;
-
-                /*  Wait till the user starts accepting once again. */
-                usock->state = NN_USOCK_STATE_LISTENING;
-
-                return;
-
-            default:
-                nn_fsm_bad_action(usock->state, src, type);
-            }
-        default:
-            nn_fsm_bad_source(usock->state, src, type);
-        }
     case NN_USOCK_STATE_ACCEPTING:
         switch (src) {
         case NN_FSM_ACTION:
