@@ -162,6 +162,10 @@ int nn_err_wsa_to_posix (int wsaerr)
         return ECONNRESET;
     case WSAESOCKTNOSUPPORT:
         return ESOCKTNOSUPPORT;
+    case ERROR_NOT_CONNECTED:
+        return ENOTCONN;
+    case ERROR_PIPE_NOT_CONNECTED:
+        return ENOTCONN;
     default:
         nn_assert (0);
     }
