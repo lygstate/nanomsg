@@ -482,8 +482,9 @@ void nn_usock_send (struct nn_usock *self, const struct nn_iovec *iov,
 {
     BOOL brc = TRUE;
     DWORD winerror = ERROR_SUCCESS;
-    WSABUF wbuf[NN_USOCK_MAX_IOVCNT];
     int i;
+    size_t totLen = 0;
+    WSABUF wbuf[NN_USOCK_MAX_IOVCNT];
 
     /*  Make sure that the socket is actually alive. */
     nn_assert_state (self, NN_USOCK_STATE_ACTIVE);
@@ -491,22 +492,27 @@ void nn_usock_send (struct nn_usock *self, const struct nn_iovec *iov,
     /*  Create a WinAPI-style iovec. */
     nn_assert (iovcnt <= NN_USOCK_MAX_IOVCNT);
     for (i = 0; i != iovcnt; ++i) {
-        wbuf [i].buf = (char FAR*) iov [i].iov_base;
-        wbuf [i].len = (u_long) iov [i].iov_len;
+        wbuf[i].buf = (char FAR*) iov[i].iov_base;
+        wbuf[i].len = (u_long)iov[i].iov_len;
+        totLen += iov[i].iov_len;
     }
-
     /*  Start the send opertation. */
     memset (&self->out.olpd, 0, sizeof (self->out.olpd));
     if (self->domain == AF_UNIX)
     {
-        self->out_count = iovcnt;
-        for (i = 0; brc && i != iovcnt; ++i) {
-            brc = WriteFile(self->p, iov[i].iov_base, iov[i].iov_len, NULL, &self->out.olpd);
+        /* TODO: fixme do not copy the buffer */
+        size_t idx = 0;
+        self->buf = nn_alloc(totLen, "SendBuf NamedPipe");
+        for (i = 0; i != iovcnt; ++i) {
+            memcpy(self->buf + idx, iov[i].iov_base, iov[i].iov_len);
+            idx += iov[i].iov_len;
         }
+        brc = WriteFile(self->p, self->buf, totLen, NULL, &self->out.olpd);
         winerror = GetLastError();
     }
     else
     {
+        self->buf = NULL;
         brc = WSASend(self->s, wbuf, iovcnt, NULL, 0, &self->out.olpd, NULL) == 0;
         winerror = WSAGetLastError();
     }
@@ -813,9 +819,11 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         case NN_USOCK_SRC_OUT:
             switch (type) {
             case NN_WORKER_OP_DONE:
-                --usock->out_count;
-                if (usock->domain != AF_UNIX || usock->out_count <= 0)
-                    nn_fsm_raise (&usock->fsm, &usock->event_sent, NN_USOCK_SENT);
+                if (usock->buf) {
+                    free(usock->buf);
+                    usock->buf = NULL;
+                }
+                nn_fsm_raise (&usock->fsm, &usock->event_sent, NN_USOCK_SENT);
                 return;
             case NN_WORKER_OP_ERROR:
                 if (nn_usock_cancel_io (usock) == 0) {
