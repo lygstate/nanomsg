@@ -38,6 +38,11 @@ int main ()
     int i;
     int s1, s2;
 
+    /*  Try closing a IPC socket while it is not connected. */
+    sc = test_socket(AF_SP, NN_PAIR);
+    test_connect(sc, SOCKET_ADDRESS);
+    test_close(sc);
+
     sb = test_socket (AF_SP, NN_PAIR);
     test_bind (sb, SOCKET_ADDRESS);
 
@@ -50,20 +55,7 @@ int main ()
     test_send (sb, "pong");
     test_recv (sc, "pong");
 
-    /*  Try closing a IPC socket while it is not connected. */
-    sc = test_socket (AF_SP, NN_PAIR);
-    test_connect (sc, SOCKET_ADDRESS);
-    test_close (sc);
 
-    /*  Open the socket anew. */
-    sc = test_socket (AF_SP, NN_PAIR);
-    test_connect (sc, SOCKET_ADDRESS);
-
-    /*  Leave enough time for at least one re-connect attempt. */
-    nn_sleep (200);
-
-    sb = test_socket (AF_SP, NN_PAIR);
-    test_bind (sb, SOCKET_ADDRESS);
 
     /*  Ping-pong test. */
     for (i = 0; i != 1; ++i) {

@@ -259,9 +259,12 @@ DWORD nn_pipe_open(struct nn_usock *self)
         OPEN_ALWAYS,
         FILE_FLAG_OVERLAPPED,
         NULL);
+    if (self->p == INVALID_HANDLE_VALUE) {
+        return GetLastError();
+    }
     /* TODO: do error convert self->p check*/
     if (!SetNamedPipeHandleState(self->p, &mode, NULL, NULL)) {
-        winerror = GetLastError();
+        return GetLastError();
     }
     winerror = GetLastError();
     if (winerror != ERROR_SUCCESS &&
@@ -443,7 +446,6 @@ void nn_usock_connect (struct nn_usock *self, const struct sockaddr *addr,
     if (self->domain == AF_UNIX) {
         winerror = nn_pipe_open(self);
         brc = winerror == ERROR_SUCCESS;
-        winerror = WSA_IO_PENDING;
     }
     else
     {
@@ -586,6 +588,10 @@ void nn_usock_recv (struct nn_usock *self, void *buf, size_t len)
 
 static void nn_usock_close(struct nn_usock *self) {
     if (self->domain == AF_UNIX) {
+        if (self->p == INVALID_HANDLE_VALUE)
+        {
+            return;
+        }
         if (self->isaccepted) {
             DisconnectNamedPipe(self->p);
         }
@@ -984,6 +990,10 @@ static int nn_usock_cancel_io (struct nn_usock *self)
     /*  For some reason simple CancelIo doesn't seem to work here.
         We have to use CancelIoEx instead. */
     rc = 0;
+    if (self->p == INVALID_HANDLE_VALUE)
+    {
+        return rc;
+    }
     if (!nn_worker_op_isidle (&self->in)) {
         brc = CancelIoEx (self->p, &self->in.olpd);
         win_assert (brc || GetLastError () == ERROR_NOT_FOUND);
