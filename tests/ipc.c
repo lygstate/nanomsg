@@ -62,9 +62,6 @@ int main ()
     /*  Leave enough time for at least one re-connect attempt. */
     nn_sleep (200);
 
-    sb = test_socket (AF_SP, NN_PAIR);
-    test_bind (sb, SOCKET_ADDRESS);
-
     /*  Ping-pong test. */
     for (i = 0; i != 1; ++i) {
         test_send (sc, "0123456789012345678901234567890123456789");

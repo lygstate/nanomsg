@@ -499,6 +499,7 @@ void nn_usock_send (struct nn_usock *self, const struct nn_iovec *iov,
     memset (&self->out.olpd, 0, sizeof (self->out.olpd));
     if (self->domain == AF_UNIX)
     {
+        self->out_count = iovcnt;
         for (i = 0; brc && i != iovcnt; ++i) {
             brc = WriteFile(self->p, iov[i].iov_base, iov[i].iov_len, NULL, &self->out.olpd);
         }
@@ -812,7 +813,9 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         case NN_USOCK_SRC_OUT:
             switch (type) {
             case NN_WORKER_OP_DONE:
-                nn_fsm_raise (&usock->fsm, &usock->event_sent, NN_USOCK_SENT);
+                --usock->out_count;
+                if (usock->out_count == 0)
+                    nn_fsm_raise (&usock->fsm, &usock->event_sent, NN_USOCK_SENT);
                 return;
             case NN_WORKER_OP_ERROR:
                 if (nn_usock_cancel_io (usock) == 0) {

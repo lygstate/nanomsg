@@ -41,6 +41,7 @@ struct nn_usock {
         HANDLE p;
     };
     BOOL isaccepted;
+    DWORD out_count;
     /*  Asynchronous operations being executed on the socket. */
     struct nn_worker_op in;
     struct nn_worker_op out;
